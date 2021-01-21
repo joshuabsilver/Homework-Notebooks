@@ -1,0 +1,107 @@
+#section1
+wikipedia_base_url = 'https://en.wikipedia.org'
+wikipedia_immigration = 'https://en.wikipedia.org/wiki/Immigration'
+immigration_save = 'wikipedia_immigration.html'
+#wikipedia_immigration = 'https://en.wikipedia.org/wiki/Immigration'
+requests.get(wikipedia_immigration)
+wikiContentRequestb = requests.get(wikipedia_immigration)
+print(wikiContentRequestb.text[:1000])
+dir(wikiContentRequestb)
+wikiContentSoupb = bs4.BeautifulSoup(wikiContentRequestb.text, 'html.parser')
+print(wikiContentSoupb.text[:200])
+#immigration_save = 'wikipedia_immigration.html'
+with open(immigration_save, mode='w', encoding='utf-8') as f:
+    f.write(wikiContentRequestb.text)
+contentPTagsb = wikiContentSoupb.body.findAll('p')
+for pTag in contentPTagsb[:3]:
+    print(pTag.text)
+contentParagraphsb = []
+for pTag in contentPTagsb:
+    #strings starting with r are raw so their \'s are not modifier characters
+    #If we didn't start with r the string would be: '\\[\\d+\\]'
+    contentParagraphsb.append(re.sub(r'\[\d+\]', '', pTag.text))
+#convert to a DataFrame
+contentParagraphsDFb = pandas.DataFrame({'paragraph-text' : contentParagraphsb})
+print(contentParagraphsDFb)
+
+#section2
+#wikipedia_base_url = 'https://en.wikipedia.org'
+
+otherPAgeURLSb = []
+#We also want to know where the links come from so we also will get:
+#the paragraph number
+#the word the link is in
+for paragraphNum, pTag in enumerate(contentPTagsb):
+    #we only want hrefs that link to wiki pages
+    tagLinks = pTag.findAll('a', href=re.compile('/wiki/'), class_=False)
+    for aTag in tagLinks:
+        #We need to extract the url from the <a> tag
+        relurl = aTag.get('href')
+        linkText = aTag.text
+        #wikipedia_base_url is the base we can use the urllib joining function to merge them
+        #Giving a nice structured tupe like this means we can use tuple expansion later
+        otherPAgeURLSb.append((
+            urllib.parse.urljoin(wikipedia_base_url, relurl),
+            paragraphNum,
+            linkText,
+        ))
+print(otherPAgeURLSb[:10])
+
+contentParagraphsDFb['source'] = [wikipedia_immigration] * len(contentParagraphsDFb['paragraph-text'])
+contentParagraphsDFb['paragraph-number'] = range(len(contentParagraphsDFb['paragraph-text']))
+
+contentParagraphsDFb
+
+contentParagraphsDFb['source-paragraph-number'] = [None] * len(contentParagraphsDFb['paragraph-text'])
+contentParagraphsDFb['source-paragraph-text'] = [None] * len(contentParagraphsDFb['paragraph-text'])
+
+def getTextFromWikiPage(targetURL, sourceParNum, sourceText):
+    #Make a dict to store data before adding it to the DataFrame
+    parsDict = {'source' : [], 'paragraph-number' : [], 'paragraph-text' : [], 'source-paragraph-number' : [],  'source-paragraph-text' : []}
+    #Now we get the page
+    r = requests.get(targetURL)
+    soup = bs4.BeautifulSoup(r.text, 'html.parser')
+    #enumerating gives use the paragraph number
+    for parNum, pTag in enumerate(soup.body.findAll('p')):
+        #same regex as before
+        parsDict['paragraph-text'].append(re.sub(r'\[\d+\]', '', pTag.text))
+        parsDict['paragraph-number'].append(parNum)
+        parsDict['source'].append(targetURL)
+        parsDict['source-paragraph-number'].append(sourceParNum)
+        parsDict['source-paragraph-text'].append(sourceText)
+    return pandas.DataFrame(parsDict)
+
+for urlTuple in otherPAgeURLSb[:3]:
+    #ignore_index means the indices will not be reset after each append
+    contentParagraphsDFb = contentParagraphsDFb.append(getTextFromWikiPage(*urlTuple),ignore_index=True)
+contentParagraphsDFb
+
+#section3
+article_pdf = 'https://polisci.mit.edu/files/ps/imce/faculty/cv/2020%20Campbell%20CV%20website%20version%20Sept.pdf'
+articleRequest = requests.get(article_pdf, stream=True)
+print(articleRequest.text[:1000])
+
+def readPDF(pdfFile):
+    #Based on code from http://stackoverflow.com/a/20905381/4955164
+    #Using utf-8, if there are a bunch of random symbols try changing this
+    codec = 'utf-8'
+    rsrcmgr = pdfminer.pdfinterp.PDFResourceManager()
+    retstr = io.StringIO()
+    layoutParams = pdfminer.layout.LAParams()
+    device = pdfminer.converter.TextConverter(rsrcmgr, retstr, laparams = layoutParams, codec = codec)
+    #We need a device and an interpreter
+    interpreter = pdfminer.pdfinterp.PDFPageInterpreter(rsrcmgr, device)
+    password = ''
+    maxpages = 0
+    caching = True
+    pagenos=set()
+    for page in pdfminer.pdfpage.PDFPage.get_pages(pdfFile, pagenos, maxpages=maxpages, password=password,caching=caching, check_extractable=True):
+        interpreter.process_page(page)
+    device.close()
+    returnedString = retstr.getvalue()
+    retstr.close()
+    return returnedString
+
+articleBytes = io.BytesIO(articleRequest.content)
+
+print(readPDF(articleBytes)[:550])
